@@ -17,10 +17,9 @@ import (
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/boltdb/bolt"
-	"github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger-bench/store"
-	"github.com/dgraph-io/badger/options"
-	"github.com/dgraph-io/badger/y"
+	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v3/y"
 	"github.com/paulbellamy/ratecounter"
 	"github.com/pkg/profile"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -159,7 +158,7 @@ func main() {
 	nw := *numKeys * mil
 	fmt.Printf("TOTAL KEYS TO WRITE: %s\n", humanize(int64(nw)))
 	opt := badger.DefaultOptions(*dir + "/badger")
-	opt.TableLoadingMode = options.MemoryMap
+	//opt.TableLoadingMode = options.MemoryMap
 	opt.SyncWrites = true
 
 	var err error

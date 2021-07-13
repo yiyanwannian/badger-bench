@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/dgraph-io/badger/y"
+	"github.com/dgraph-io/badger/v3/y"
 )
 
 // BenchmarkWrite gives us write speed to some drive.

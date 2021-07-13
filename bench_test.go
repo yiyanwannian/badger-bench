@@ -14,10 +14,9 @@ import (
 
 	"github.com/bmatsuo/lmdb-go/lmdb"
 	"github.com/boltdb/bolt"
-	"github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger-bench/store"
-	"github.com/dgraph-io/badger/options"
-	"github.com/dgraph-io/badger/y"
+	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v3/y"
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
@@ -33,8 +32,8 @@ const Mf float64 = 1000000
 
 func getBadger() (*badger.DB, error) {
 	opt := badger.DefaultOptions(*flagDir + "/badger")
-	opt.TableLoadingMode = options.LoadToRAM
-	opt.ReadOnly = true
+	//opt.TableLoadingMode = options.LoadToRAM
+	//opt.ReadOnly = true
 	return badger.Open(opt)
 }
 

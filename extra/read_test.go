@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/dgraph-io/badger/y"
+	"github.com/dgraph-io/badger/v3/y"
 )
 
 func createFile(writeBuf []byte) string {

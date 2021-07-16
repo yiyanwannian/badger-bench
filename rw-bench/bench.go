@@ -3,11 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"math/rand"
 	"os"
-	"runtime"
-	"runtime/pprof"
 	"time"
 
 	"github.com/dgraph-io/badger-bench/rdb"
@@ -30,7 +27,7 @@ type entry struct {
 	Meta  byte
 }
 
-func fillEntryWithIndex(e *entry, index int) {
+func fillEntryWithIndex(e *entry, valueSz, index int) {
 	k := rand.Intn(*numKeys * mil * 10)
 	key := fmt.Sprintf("vsz=%036d-k=%010d-%010d", *valueSize, k, index) // 64 bytes.
 	if cap(e.Key) < len(key) {
@@ -39,13 +36,13 @@ func fillEntryWithIndex(e *entry, index int) {
 	e.Key = e.Key[:len(key)]
 	copy(e.Key, key)
 
-	rCnt := *valueSize
+	rCnt := valueSz
 	p := make([]byte, rCnt)
 	r := rand.New(rand.NewSource(time.Now().Unix()))
 	for i := 0; i < rCnt; i++ {
 		p[i] = ' ' + byte(r.Intn('~'-' '+1))
 	}
-	e.Value = p[:*valueSize]
+	e.Value = p[:valueSz]
 
 	//rCnt := 100
 	//p := make([]byte, rCnt)
@@ -89,185 +86,297 @@ func createEntries(entries []*entry) *rdb.WriteBatch {
 }
 
 func main() {
-	flag.Parse()
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal("could not create CPU profile: ", err)
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
-		defer pprof.StopCPUProfile()
+	valueSz := 1024
+	dataCntRange := 20
+	skip := 1
+	batchCnt := 10000
+
+	badgerTimes := make([]float64, 0, dataCntRange)
+	rocksdbTimes := make([]float64, 0, dataCntRange)
+	for i := 1; i <= dataCntRange; i++ {
+		rt, bt := bench_test(i * skip, valueSz, batchCnt)
+		rocksdbTimes = append(rocksdbTimes, rt)
+		badgerTimes = append(badgerTimes, bt)
 	}
 
+	for i := 0; i < len(badgerTimes); i++ {
+		fmt.Println(fmt.Sprintf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op",
+			(i + 1) * batchCnt * skip, badgerTimes[i], rocksdbTimes[i]))
+	}
+}
+
+func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64){
+	total := dataCnt * batchCnt
+
 	rand.Seed(time.Now().Unix())
-	opt := badger.DefaultOptions("tmp/badger")
+	bpath := fmt.Sprintf("tmp/badger-%dw", dataCnt)
+	opt := badger.DefaultOptions(bpath)
 	// opt.MapTablesTo = table.Nothing
 	opt.SyncWrites = false
 
 	var err error
-	y.Check(os.RemoveAll("tmp/badger"))
-	os.MkdirAll("tmp/badger", 0777)
+
+	//y.Check(os.RemoveAll("tmp/badger"))
+	os.MkdirAll(bpath, 0777)
 	bdg, err = badger.Open(opt)
 	y.Check(err)
 
-	y.Check(os.RemoveAll("tmp/rocks"))
-	os.MkdirAll("tmp/rocks", 0777)
-	rocks, err = store.NewStore("tmp/rocks")
+	//y.Check(os.RemoveAll("tmp/rocks"))
+	rpath := fmt.Sprintf("tmp/rocks-%dw", dataCnt)
+	os.MkdirAll(rpath, 0777)
+	rocks, err = store.NewStore(rpath)
 	y.Check(err)
 
-	unit := 10000
-	total := *numKeys*unit
-
-	keystart := time.Now()
-	for i:= 0; i < 1000; i ++ {
-		e := new(entry)
-		fillEntryWithIndex(e, 1000 + i)
-	}
-	keytime := time.Since(keystart)
-	keyus := keytime.Microseconds() * int64(total / 1000)
-
 	fmt.Println("Num unique keys: ", total)
-	fmt.Println("gen keys time: ", keyus)
+	fmt.Println("each batch: ", batchCnt)
 	fmt.Println("Key size: ", 64)
-	fmt.Println("Value size: ", *valueSize)
+	fmt.Println("Value size: ", valuesz)
 
 	fmt.Println("RocksDB:")
+	rtotalWriteTime := float64(0)
 	rstart := time.Now()
-	for i := 0; i < total; i ++ {
-		e := new(entry)
-		fillEntryWithIndex(e, i)
+	for i := 1; i <= dataCnt ; i ++ {
 		rb := rocks.NewWriteBatch()
-		rb.Put(e.Key, e.Value)
-		y.Check(rocks.WriteBatch(rb))
-		rb.Destroy()
-		if i % unit == 0 {
-			fmt.Println(fmt.Sprintf("rocksdb write %d st data", i))
+		for j := 0; j < batchCnt; j ++ {
+			e := new(entry)
+			fillEntryWithIndex(e, valuesz, i)
+			rb.Put(e.Key, e.Value)
 		}
+		wstart := time.Now()
+		y.Check(rocks.WriteBatch(rb))
+		wend := time.Since(wstart)
+		rb.Destroy()
+		fmt.Println(fmt.Sprintf("rocksdb write %d st data", i))
+		rtotalWriteTime = rtotalWriteTime + float64(wend.Microseconds())
 	}
-
-	rstime := time.Since(rstart)
-	fmt.Println("Total time: ", rstime)
+	rtotalWriteTime = rtotalWriteTime / float64(total)
+	fmt.Println( fmt.Sprintf("Total write time: %f μs/op", rtotalWriteTime))
+	fmt.Println("Total time: ", time.Since(rstart))
 	rocks.Close()
 
 	fmt.Println("Badger:")
 	bstart := time.Now()
-	for i := 0; i < total; i ++ {
-		txn := bdg.NewTransaction(true)
-		e := new(entry)
-		fillEntryWithIndex(e, i)
-		y.Check(txn.Set(e.Key, e.Value))
-		y.Check(txn.Commit())
-		if i % unit == 0 {
-			fmt.Println(fmt.Sprintf("badger write %d st data", i))
+	btotalWriteTime := float64(0)
+	for i := 0; i < dataCnt ; i ++ {
+		wb := bdg.NewWriteBatch()
+		//txn := bdg.NewTransaction(true)
+		for j := 0; j < batchCnt; j ++ {
+			e := new(entry)
+			fillEntryWithIndex(e, valuesz, i)
+			y.Check(wb.Set(e.Key, e.Value))
+			//y.Check(txn.Set(e.Key, e.Value))
 		}
+		wstart := time.Now()
+		y.Check(wb.Flush())
+		//y.Check(txn.Commit())
+		wend := time.Since(wstart)
+		fmt.Println(fmt.Sprintf("badger write %d st data", i))
+		btotalWriteTime = btotalWriteTime + float64(wend.Microseconds())
 	}
+	btotalWriteTime = btotalWriteTime / float64(total)
+	fmt.Println(fmt.Sprintf("Total write time: %f μs/op", btotalWriteTime))
+	fmt.Println("Total time: ",time.Since(bstart))
 	bdg.Close()
-
-	bstime := time.Since(bstart)
-	fmt.Println("Total time: ",bstime)
 
 	fmt.Println("\nTotal:", total)
 	fmt.Println("Key size:", 64)
-	fmt.Println("Value size:", *valueSize)
-	fmt.Println("Rocksdb: ", rstime)
-	fmt.Println("Badgerdb: ", bstime)
+	fmt.Println("Value size:", valuesz)
+	fmt.Println(fmt.Sprintf("Cgorocksdb write: %f μs/op", rtotalWriteTime))
+	fmt.Println(fmt.Sprintf("Badgerdb write: %f μs/op", btotalWriteTime))
 
-	fmt.Println(fmt.Sprintf("Rocksdb: %d s", (rstime.Microseconds() - keyus) / 1000000))
-	fmt.Println(fmt.Sprintf("Badgerdb: %d s", (bstime.Microseconds() - keyus) / 1000000))
+	return rtotalWriteTime, btotalWriteTime
 }
 
+//func main_put() {
+//	flag.Parse()
+//	if *cpuprofile != "" {
+//		f, err := os.Create(*cpuprofile)
+//		if err != nil {
+//			log.Fatal("could not create CPU profile: ", err)
+//		}
+//		if err := pprof.StartCPUProfile(f); err != nil {
+//			log.Fatal("could not start CPU profile: ", err)
+//		}
+//		defer pprof.StopCPUProfile()
+//	}
+//
+//	rand.Seed(time.Now().Unix())
+//	opt := badger.DefaultOptions("tmp/badger")
+//	// opt.MapTablesTo = table.Nothing
+//	opt.SyncWrites = false
+//
+//	var err error
+//	y.Check(os.RemoveAll("tmp/badger"))
+//	os.MkdirAll("tmp/badger", 0777)
+//	bdg, err = badger.Open(opt)
+//	y.Check(err)
+//
+//	y.Check(os.RemoveAll("tmp/rocks"))
+//	os.MkdirAll("tmp/rocks", 0777)
+//	rocks, err = store.NewStore("tmp/rocks")
+//	y.Check(err)
+//
+//	batchCnt := 10000
+//	total := *numKeys* batchCnt
+//
+//	fmt.Println("Num unique keys: ", total)
+//	fmt.Println("each batch: ", batchCnt)
+//	fmt.Println("Key size: ", 64)
+//	fmt.Println("Value size: ", *valueSize)
+//
+//	fmt.Println("RocksDB:")
+//	rtotalWriteTime := int64(0)
+//	rstart := time.Now()
+//	var wstart time.Time
+//	var wend time.Duration
+//	for i := 0; i < *numKeys ; i ++ {
+//		//rb := rocks.NewWriteBatch()
+//		for j := 0; j < batchCnt; j ++ {
+//			e := new(entry)
+//			fillEntryWithIndex(e, i)
+//			wstart = time.Now()
+//			y.Check(rocks.SetOne(e.Key, e.Value))
+//			wend = time.Since(wstart)
+//			//rb.Put(e.Key, e.Value)
+//			rtotalWriteTime = rtotalWriteTime + wend.Microseconds()
+//		}
+//		//wstart := time.Now()
+//		//y.Check(rocks.WriteBatch(rb))
+//		//wend := time.Since(wstart)
+//		//rb.Destroy()
+//		fmt.Println(fmt.Sprintf("rocksdb write %d st data", i))
+//		//rtotalWriteTime = rtotalWriteTime + wend.Microseconds()
+//	}
+//	rtotalWriteTime = rtotalWriteTime / 1000.0
+//	fmt.Println( fmt.Sprintf("Total write time: %d s", rtotalWriteTime))
+//	fmt.Println("Total time: ", time.Since(rstart))
+//	rocks.Close()
+//
+//	fmt.Println("Badger:")
+//	bstart := time.Now()
+//	btotalWriteTime := int64(0)
+//	for i := 0; i < *numKeys ; i ++ {
+//		//	wb := bdg.NewWriteBatch()
+//		//	txn := bdg.NewTransaction(true)
+//		for j := 0; j < batchCnt; j ++ {
+//			e := new(entry)
+//			fillEntryWithIndex(e, i)
+//			//y.Check(wb.Set(e.Key, e.Value))
+//			wstart = time.Now()
+//			txn := bdg.NewTransaction(true)
+//			y.Check(txn.Set(e.Key, e.Value))
+//			y.Check(txn.Commit())
+//			wend = time.Since(wstart)
+//			btotalWriteTime = btotalWriteTime + wend.Microseconds()
+//		}
+//		//wstart := time.Now()
+//		//y.Check(wb.Flush())
+//		//y.Check(txn.Commit())
+//		//wend := time.Since(wstart)
+//		fmt.Println(fmt.Sprintf("badger write %d st data", i))
+//		//btotalWriteTime = btotalWriteTime + wend.Microseconds()
+//	}
+//	btotalWriteTime = btotalWriteTime / 1000.0
+//	fmt.Println(fmt.Sprintf("Total write time: %d s", btotalWriteTime))
+//	fmt.Println("Total time: ",time.Since(bstart))
+//	bdg.Close()
+//
+//	fmt.Println("\nTotal:", total)
+//	fmt.Println("Key size:", 64)
+//	fmt.Println("Value size:", *valueSize)
+//	fmt.Println(fmt.Sprintf("Cgorocksdb write: %d s", rtotalWriteTime))
+//	fmt.Println(fmt.Sprintf("Badgerdb write: %d s", btotalWriteTime))
+//}
 
-func main1() {
-	flag.Parse()
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal("could not create CPU profile: ", err)
-		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
-		defer pprof.StopCPUProfile()
-	}
-
-	rand.Seed(time.Now().Unix())
-	opt := badger.DefaultOptions("tmp/badger")
-	// opt.MapTablesTo = table.Nothing
-	opt.SyncWrites = false
-
-	var err error
-	y.Check(os.RemoveAll("tmp/badger"))
-	os.MkdirAll("tmp/badger", 0777)
-	bdg, err = badger.Open(opt)
-	y.Check(err)
-
-	y.Check(os.RemoveAll("tmp/rocks"))
-	os.MkdirAll("tmp/rocks", 0777)
-	rocks, err = store.NewStore("tmp/rocks")
-	y.Check(err)
-
-	tmp := 10000
-	entries := make([]*entry, *numKeys*tmp)
-	for i := 0; i < len(entries); i++ {
-		e := new(entry)
-		e.Key = make([]byte, 64)
-		e.Value = make([]byte, *valueSize)
-		entries[i] = e
-	}
-	rb := createEntries(entries)
-	txn := bdg.NewTransaction(true)
-	for _, e := range entries {
-		y.Check(txn.Set(e.Key, e.Value))
-	}
-
-	fmt.Println("Key size:", len(entries[0].Key))
-	fmt.Println("Value size:", *valueSize)
-	fmt.Println("RocksDB:")
-	rstart := time.Now()
-	y.Check(rocks.WriteBatch(rb))
-	count := *numKeys * tmp
-	//var count int
-	//ritr := rocks.NewIterator()
-	//ristart := time.Now()
-	//for ritr.SeekToFirst(); ritr.Valid(); ritr.Next() {
-	//	_ = ritr.Key()
-	//	count++
-	//}
-	fmt.Println("Num unique keys:", count)
-	//fmt.Println("Iteration time: ", time.Since(ristart))
-	fmt.Println("Total time: ", time.Since(rstart))
-	rb.Destroy()
-	rocks.Close()
-
-	fmt.Println("Badger:")
-	bstart := time.Now()
-	y.Check(txn.Commit())
-	//iopt := badger.IteratorOptions{}
-	////bistart := time.Now()
-	//iopt.PrefetchValues = false
-	//iopt.PrefetchSize = 1000
-	//txn = bdg.NewTransaction(false)
-	//bitr := txn.NewIterator(iopt)
-	//count = 0
-	//for bitr.Rewind(); bitr.Valid(); bitr.Next() {
-	//	_ = bitr.Item().Key()
-	//	count++
-	//}
-	fmt.Println("Num unique keys:", count)
-	//fmt.Println("Iteration time: ", time.Since(bistart))
-	fmt.Println("Total time: ", time.Since(bstart))
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
-		if err != nil {
-			log.Fatal("could not create memory profile: ", err)
-		}
-		runtime.GC() // get up-to-date statistics
-		if err := pprof.WriteHeapProfile(f); err != nil {
-			log.Fatal("could not write memory profile: ", err)
-		}
-		f.Close()
-	}
-	bdg.Close()
-}
+//func main1() {
+//	flag.Parse()
+//	if *cpuprofile != "" {
+//		f, err := os.Create(*cpuprofile)
+//		if err != nil {
+//			log.Fatal("could not create CPU profile: ", err)
+//		}
+//		if err := pprof.StartCPUProfile(f); err != nil {
+//			log.Fatal("could not start CPU profile: ", err)
+//		}
+//		defer pprof.StopCPUProfile()
+//	}
+//
+//	rand.Seed(time.Now().Unix())
+//	opt := badger.DefaultOptions("tmp/badger")
+//	// opt.MapTablesTo = table.Nothing
+//	opt.SyncWrites = false
+//
+//	var err error
+//	y.Check(os.RemoveAll("tmp/badger"))
+//	os.MkdirAll("tmp/badger", 0777)
+//	bdg, err = badger.Open(opt)
+//	y.Check(err)
+//
+//	y.Check(os.RemoveAll("tmp/rocks"))
+//	os.MkdirAll("tmp/rocks", 0777)
+//	rocks, err = store.NewStore("tmp/rocks")
+//	y.Check(err)
+//
+//	tmp := 10000
+//	entries := make([]*entry, *numKeys*tmp)
+//	for i := 0; i < len(entries); i++ {
+//		e := new(entry)
+//		e.Key = make([]byte, 64)
+//		e.Value = make([]byte, *valueSize)
+//		entries[i] = e
+//	}
+//	rb := createEntries(entries)
+//	txn := bdg.NewTransaction(true)
+//	for _, e := range entries {
+//		y.Check(txn.Set(e.Key, e.Value))
+//	}
+//
+//	fmt.Println("Key size:", len(entries[0].Key))
+//	fmt.Println("Value size:", *valueSize)
+//	fmt.Println("RocksDB:")
+//	rstart := time.Now()
+//	y.Check(rocks.WriteBatch(rb))
+//	count := *numKeys * tmp
+//	//var count int
+//	//ritr := rocks.NewIterator()
+//	//ristart := time.Now()
+//	//for ritr.SeekToFirst(); ritr.Valid(); ritr.Next() {
+//	//	_ = ritr.Key()
+//	//	count++
+//	//}
+//	fmt.Println("Num unique keys:", count)
+//	//fmt.Println("Iteration time: ", time.Since(ristart))
+//	fmt.Println("Total time: ", time.Since(rstart))
+//	rb.Destroy()
+//	rocks.Close()
+//
+//	fmt.Println("Badger:")
+//	bstart := time.Now()
+//	y.Check(txn.Commit())
+//	//iopt := badger.IteratorOptions{}
+//	////bistart := time.Now()
+//	//iopt.PrefetchValues = false
+//	//iopt.PrefetchSize = 1000
+//	//txn = bdg.NewTransaction(false)
+//	//bitr := txn.NewIterator(iopt)
+//	//count = 0
+//	//for bitr.Rewind(); bitr.Valid(); bitr.Next() {
+//	//	_ = bitr.Item().Key()
+//	//	count++
+//	//}
+//	fmt.Println("Num unique keys:", count)
+//	//fmt.Println("Iteration time: ", time.Since(bistart))
+//	fmt.Println("Total time: ", time.Since(bstart))
+//	if *memprofile != "" {
+//		f, err := os.Create(*memprofile)
+//		if err != nil {
+//			log.Fatal("could not create memory profile: ", err)
+//		}
+//		runtime.GC() // get up-to-date statistics
+//		if err := pprof.WriteHeapProfile(f); err != nil {
+//			log.Fatal("could not write memory profile: ", err)
+//		}
+//		f.Close()
+//	}
+//	bdg.Close()
+//}

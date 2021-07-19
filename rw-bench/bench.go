@@ -20,10 +20,11 @@ var (
 	// cpuprofile = flag.String("cpuprofile", "", "write cpu profile `file`")
 	// memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
-	valueSize    = flag.Int("valsz", 0, "Value size in bytes.")
-	dataCntRange = flag.Int("dataCntRange", 1, "How many data write count range.")
-	skip         = flag.Int("skip", 1, "How many million keys grow skip.")
-	batchCnt     = flag.Int("batchCnt", 1, "How many keys each batch write.")
+	valueSize  = flag.Int("valsz", 0, "Value size in bytes.")
+	start      = flag.Int("start", 1, "data write count range start.")
+	end        = flag.Int("end", 1, "data write count range end.")
+	sp         = flag.Int("skip", 1, "How many million keys grow skip.")
+	bsize      = flag.Int("batchSize", 1, "How many keys each batch write.")
 )
 
 type entry struct {
@@ -94,35 +95,46 @@ func main() {
 	// valueSz := 1024
 	// dataCntRange := 10
 	// skip := 1
-	// batchCnt := 10000
+	// batchSize := 10000
 
 	flag.Parse()
 	valueSz := *valueSize
-	dataCntRange := *dataCntRange
-	skip := *skip
-	batchCnt := *batchCnt
+	dataRangeStart := *start
+	dataRangeEnd := *end
+	skip := *sp
+	batchSize := *bsize
 
 	fmt.Printf("valueSz: %d\n", valueSz)
-	fmt.Printf("dataCntRange: %d\n", dataCntRange)
+	fmt.Printf("dataRangeStart: %d\n", dataRangeStart)
+	fmt.Printf("dataRangeEnd: %d\n", dataRangeEnd)
 	fmt.Printf("skip: %d\n", skip)
-	fmt.Printf("batchCnt: %d\n", batchCnt)
+	fmt.Printf("batchSize: %d\n", batchSize)
 
-	badgerTimes := make([]float64, 0, dataCntRange)
-	rocksdbTimes := make([]float64, 0, dataCntRange)
-	for i := 1; i <= dataCntRange; i++ {
-		rt, bt := bench_test(i*skip, valueSz, batchCnt)
+	if dataRangeStart < 1 {
+		dataRangeStart = 1
+	}
+
+	if dataRangeEnd < dataRangeStart {
+		dataRangeEnd = dataRangeStart
+	}
+
+	dataRangeCnt := dataRangeEnd - dataRangeStart
+	badgerTimes := make([]float64, 0, dataRangeCnt)
+	rocksdbTimes := make([]float64, 0, dataRangeCnt)
+	for i := dataRangeStart; i <= dataRangeEnd; i++ {
+		rt, bt := bench_test(i*skip, valueSz, batchSize)
 		rocksdbTimes = append(rocksdbTimes, rt)
 		badgerTimes = append(badgerTimes, bt)
 	}
 
 	for i := 0; i < len(badgerTimes); i++ {
 		fmt.Printf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op\n",
-			(i+1)*batchCnt*skip, badgerTimes[i], rocksdbTimes[i])
+			(i+1)*batchSize*skip, badgerTimes[i], rocksdbTimes[i])
 	}
 }
 
-func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64) {
-	total := dataCnt * batchCnt
+func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float64) {
+	total := dataCnt * batchSize
 
 	rand.Seed(time.Now().Unix())
 	bpath := fmt.Sprintf("tmp/badger-%dw", dataCnt)
@@ -144,7 +156,7 @@ func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64
 	y.Check(err)
 
 	fmt.Println("Num unique keys: ", total)
-	fmt.Println("each batch: ", batchCnt)
+	fmt.Println("each batch: ", batchSize)
 	fmt.Println("Key size: ", 64)
 	fmt.Println("Value size: ", valuesz)
 
@@ -153,7 +165,7 @@ func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64
 	rstart := time.Now()
 	for i := 1; i <= dataCnt; i++ {
 		rb := rocks.NewWriteBatch()
-		for j := 0; j < batchCnt; j++ {
+		for j := 0; j < batchSize; j++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, i)
 			rb.Put(e.Key, e.Value)
@@ -176,7 +188,7 @@ func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64
 	for i := 0; i < dataCnt; i++ {
 		wb := bdg.NewWriteBatch()
 		//txn := bdg.NewTransaction(true)
-		for j := 0; j < batchCnt; j++ {
+		for j := 0; j < batchSize; j++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, i)
 			y.Check(wb.Set(e.Key, e.Value))

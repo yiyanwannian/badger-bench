@@ -20,4 +20,7 @@ require (
 	golang.org/x/net v0.0.0-20210614182718-04defd469f4e
 )
 
-replace github.com/dgraph-io/badger/v3 => ../../../github.com/dgraph-io/badger
+replace (
+	github.com/dgraph-io/badger/v3 => ../../../github.com/dgraph-io/badger
+	github.com/google/flatbuffers/go => ../../../github.com/google/flatbuffers/go
+)

@@ -14,11 +14,16 @@ import (
 )
 
 var (
-	numKeys    = flag.Int("keys_mil", 1, "How many million keys to write.")
-	valueSize  = flag.Int("valsz", 0, "Value size in bytes.")
-	mil        = 1000000
-	cpuprofile = flag.String("cpuprofile", "", "write cpu profile `file`")
-	memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+	numKeys = flag.Int("keys_mil", 1, "How many million keys to write.")
+	// valueSize = flag.Int("valsz", 0, "Value size in bytes.")
+	mil = 1000000
+	// cpuprofile = flag.String("cpuprofile", "", "write cpu profile `file`")
+	// memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+
+	valueSize    = flag.Int("valsz", 0, "Value size in bytes.")
+	dataCntRange = flag.Int("dataCntRange", 1, "How many data write count range.")
+	skip         = flag.Int("skip", 1, "How many million keys grow skip.")
+	batchCnt     = flag.Int("batchCnt", 1, "How many keys each batch write.")
 )
 
 type entry struct {
@@ -86,26 +91,37 @@ func createEntries(entries []*entry) *rdb.WriteBatch {
 }
 
 func main() {
-	valueSz := 1024
-	dataCntRange := 20
-	skip := 1
-	batchCnt := 10000
+	// valueSz := 1024
+	// dataCntRange := 10
+	// skip := 1
+	// batchCnt := 10000
+
+	flag.Parse()
+	valueSz := *valueSize
+	dataCntRange := *dataCntRange
+	skip := *skip
+	batchCnt := *batchCnt
+
+	fmt.Printf("valueSz: %d\n", valueSz)
+	fmt.Printf("dataCntRange: %d\n", dataCntRange)
+	fmt.Printf("skip: %d\n", skip)
+	fmt.Printf("batchCnt: %d\n", batchCnt)
 
 	badgerTimes := make([]float64, 0, dataCntRange)
 	rocksdbTimes := make([]float64, 0, dataCntRange)
 	for i := 1; i <= dataCntRange; i++ {
-		rt, bt := bench_test(i * skip, valueSz, batchCnt)
+		rt, bt := bench_test(i*skip, valueSz, batchCnt)
 		rocksdbTimes = append(rocksdbTimes, rt)
 		badgerTimes = append(badgerTimes, bt)
 	}
 
 	for i := 0; i < len(badgerTimes); i++ {
-		fmt.Println(fmt.Sprintf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op",
-			(i + 1) * batchCnt * skip, badgerTimes[i], rocksdbTimes[i]))
+		fmt.Printf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op\n",
+			(i+1)*batchCnt*skip, badgerTimes[i], rocksdbTimes[i])
 	}
 }
 
-func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64){
+func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64) {
 	total := dataCnt * batchCnt
 
 	rand.Seed(time.Now().Unix())
@@ -135,9 +151,9 @@ func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64
 	fmt.Println("RocksDB:")
 	rtotalWriteTime := float64(0)
 	rstart := time.Now()
-	for i := 1; i <= dataCnt ; i ++ {
+	for i := 1; i <= dataCnt; i++ {
 		rb := rocks.NewWriteBatch()
-		for j := 0; j < batchCnt; j ++ {
+		for j := 0; j < batchCnt; j++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, i)
 			rb.Put(e.Key, e.Value)
@@ -146,21 +162,21 @@ func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64
 		y.Check(rocks.WriteBatch(rb))
 		wend := time.Since(wstart)
 		rb.Destroy()
-		fmt.Println(fmt.Sprintf("rocksdb write %d st data", i))
+		fmt.Printf("rocksdb write %d st data\n", i)
 		rtotalWriteTime = rtotalWriteTime + float64(wend.Microseconds())
 	}
 	rtotalWriteTime = rtotalWriteTime / float64(total)
-	fmt.Println( fmt.Sprintf("Total write time: %f μs/op", rtotalWriteTime))
+	fmt.Printf("Total write time: %f μs/op\n", rtotalWriteTime)
 	fmt.Println("Total time: ", time.Since(rstart))
 	rocks.Close()
 
 	fmt.Println("Badger:")
 	bstart := time.Now()
 	btotalWriteTime := float64(0)
-	for i := 0; i < dataCnt ; i ++ {
+	for i := 0; i < dataCnt; i++ {
 		wb := bdg.NewWriteBatch()
 		//txn := bdg.NewTransaction(true)
-		for j := 0; j < batchCnt; j ++ {
+		for j := 0; j < batchCnt; j++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, i)
 			y.Check(wb.Set(e.Key, e.Value))
@@ -170,19 +186,19 @@ func bench_test(dataCnt, valuesz, batchCnt int) (rocksdbTime, badgerTime float64
 		y.Check(wb.Flush())
 		//y.Check(txn.Commit())
 		wend := time.Since(wstart)
-		fmt.Println(fmt.Sprintf("badger write %d st data", i))
+		fmt.Printf("badger write %d st data\n", i)
 		btotalWriteTime = btotalWriteTime + float64(wend.Microseconds())
 	}
 	btotalWriteTime = btotalWriteTime / float64(total)
-	fmt.Println(fmt.Sprintf("Total write time: %f μs/op", btotalWriteTime))
-	fmt.Println("Total time: ",time.Since(bstart))
+	fmt.Printf("Total write time: %f μs/op\n", btotalWriteTime)
+	fmt.Println("Total time: ", time.Since(bstart))
 	bdg.Close()
 
 	fmt.Println("\nTotal:", total)
 	fmt.Println("Key size:", 64)
 	fmt.Println("Value size:", valuesz)
-	fmt.Println(fmt.Sprintf("Cgorocksdb write: %f μs/op", rtotalWriteTime))
-	fmt.Println(fmt.Sprintf("Badgerdb write: %f μs/op", btotalWriteTime))
+	fmt.Printf("Cgorocksdb write: %f μs/op\n", rtotalWriteTime)
+	fmt.Printf("Badgerdb write: %f μs/op\n", btotalWriteTime)
 
 	return rtotalWriteTime, btotalWriteTime
 }

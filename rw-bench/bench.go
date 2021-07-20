@@ -127,7 +127,7 @@ func main() {
 		badgerTimes = append(badgerTimes, bt)
 	}
 
-	for i := 0; i < len(badgerTimes); i++ {
+	for i := dataRangeStart; i <= dataRangeEnd; i++ {
 		fmt.Printf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op\n",
 			(i+1)*batchSize*skip, badgerTimes[i], rocksdbTimes[i])
 	}

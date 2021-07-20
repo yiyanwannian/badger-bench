@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/syndtr/goleveldb/leveldb"
 	"math/rand"
 	"os"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/dgraph-io/badger-bench/store"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/dgraph-io/badger/v3/y"
+	lvlopt "github.com/syndtr/goleveldb/leveldb/opt"
 )
 
 var (
@@ -81,6 +83,7 @@ func fillEntry(e *entry) {
 
 var bdg *badger.DB
 var rocks *store.Store
+var level *leveldb.DB
 
 func createEntries(entries []*entry) *rdb.WriteBatch {
 	rb := rocks.NewWriteBatch()
@@ -122,18 +125,113 @@ func main() {
 	badgerTimes := make([]float64, 0, dataRangeCnt)
 	rocksdbTimes := make([]float64, 0, dataRangeCnt)
 	for i := dataRangeStart; i <= dataRangeEnd; i++ {
-		rt, bt := bench_test(i*skip, valueSz, batchSize)
+		rt, bt := bench_badgerdb_leveldb_test(i*skip, valueSz, batchSize)
 		rocksdbTimes = append(rocksdbTimes, rt)
 		badgerTimes = append(badgerTimes, bt)
 	}
 
 	for i := 0; i < len(badgerTimes); i++ {
-		fmt.Printf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op\n",
+		fmt.Printf("total: %d, badgerTime: %f μs/op, leveldbTime: %f μs/op\n",
 			(i+dataRangeStart)*batchSize*skip, badgerTimes[i], rocksdbTimes[i])
 	}
 }
 
-func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float64) {
+func bench_badgerdb_leveldb_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float64) {
+	total := dataCnt * batchSize
+
+	rand.Seed(time.Now().Unix())
+	bpath := fmt.Sprintf("tmp/badger-%dw", dataCnt)
+	opt := badger.DefaultOptions(bpath)
+	// opt.MapTablesTo = table.Nothing
+	opt.SyncWrites = false
+
+	var err error
+
+	//y.Check(os.RemoveAll("tmp/badger"))
+	os.MkdirAll(bpath, 0777)
+	bdg, err = badger.Open(opt)
+	y.Check(err)
+
+	//y.Check(os.RemoveAll("tmp/level"))
+	rpath := fmt.Sprintf("tmp/level-%dw", dataCnt)
+	os.MkdirAll(rpath, 0777)
+	level, err = leveldb.OpenFile(rpath, &lvlopt.Options{})
+	y.Check(err)
+
+	fmt.Println("Num unique keys: ", total)
+	fmt.Println("each batch: ", batchSize)
+	fmt.Println("Key size: ", 64)
+	fmt.Println("Value size: ", valuesz)
+
+	fmt.Println("LevelDB:")
+	rtotalWriteTime := float64(0)
+	rstart := time.Now()
+	for i := 1; i <= dataCnt; i++ {
+		entries := make([]*entry, 0, batchSize)
+		for k := 0; k < batchSize; k++ {
+			e := new(entry)
+			fillEntryWithIndex(e, valuesz, k)
+			entries = append(entries, e)
+		}
+
+		wstart := time.Now()
+		lb := &leveldb.Batch{}
+		for j := 0; j < batchSize; j++ {
+			lb.Put(entries[j].Key, entries[j].Value)
+		}
+
+		y.Check(level.Write(lb, &lvlopt.WriteOptions{Sync: false}))
+		wend := time.Since(wstart)
+		fmt.Printf("leveldb write %d st data\n", i)
+		rtotalWriteTime = rtotalWriteTime + float64(wend.Microseconds())
+	}
+
+	fmt.Printf("Total leveldb write time: %f ms\n", rtotalWriteTime/1000)
+	rtotalWriteTime = rtotalWriteTime / float64(total)
+	fmt.Printf("Each leveldb write time: %f μs/op\n", rtotalWriteTime)
+	fmt.Println("Total leveldb time: ", time.Since(rstart))
+	level.Close()
+
+	fmt.Println("Badger:")
+	bstart := time.Now()
+	btotalWriteTime := float64(0)
+	for i := 0; i < dataCnt; i++ {
+		entries := make([]*entry, 0, batchSize)
+		for k := 0; k < batchSize; k++ {
+			e := new(entry)
+			fillEntryWithIndex(e, valuesz, k)
+			entries = append(entries, e)
+		}
+
+		wstart := time.Now()
+		wb := bdg.NewWriteBatch()
+		//txn := bdg.NewTransaction(true)
+		for j := 0; j < batchSize; j++ {
+			y.Check(wb.Set(entries[j].Key, entries[j].Value))
+			//y.Check(txn.Set(e.Key, e.Value))
+		}
+		y.Check(wb.Flush())
+		//y.Check(txn.Commit())
+		wend := time.Since(wstart)
+		fmt.Printf("badger write %d st data\n", i)
+		btotalWriteTime = btotalWriteTime + float64(wend.Microseconds())
+	}
+	fmt.Printf("Total badger write time: %f ms\n", btotalWriteTime/1000)
+	btotalWriteTime = btotalWriteTime / float64(total)
+	fmt.Printf("Each badger write time: %f μs/op\n", btotalWriteTime)
+	fmt.Println("Total badger time: ", time.Since(bstart))
+	bdg.Close()
+
+	fmt.Println("\nTotal:", total)
+	fmt.Println("Key size:", 64)
+	fmt.Println("Value size:", valuesz)
+	fmt.Printf("Leveldb write: %f μs/op\n", rtotalWriteTime)
+	fmt.Printf("Badgerdb write: %f μs/op\n", btotalWriteTime)
+
+	return rtotalWriteTime, btotalWriteTime
+}
+
+func bench_badgerdb_rocksdb_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float64) {
 	total := dataCnt * batchSize
 
 	rand.Seed(time.Now().Unix())

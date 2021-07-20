@@ -164,21 +164,29 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 	rtotalWriteTime := float64(0)
 	rstart := time.Now()
 	for i := 1; i <= dataCnt; i++ {
+		entries := make([]*entry, 0, batchSize)
+		for k := 0; k < batchSize; k ++ {
+			e := new(entry)
+			fillEntryWithIndex(e, valuesz, k)
+			entries = append(entries, e)
+		}
+
+		wstart := time.Now()
 		rb := rocks.NewWriteBatch()
 		for j := 0; j < batchSize; j++ {
-			e := new(entry)
-			fillEntryWithIndex(e, valuesz, i)
-			rb.Put(e.Key, e.Value)
+			rb.Put(entries[i].Key, entries[j].Value)
 		}
-		wstart := time.Now()
+
 		y.Check(rocks.WriteBatch(rb))
-		wend := time.Since(wstart)
 		rb.Destroy()
+		wend := time.Since(wstart)
 		fmt.Printf("rocksdb write %d st data\n", i)
 		rtotalWriteTime = rtotalWriteTime + float64(wend.Microseconds())
 	}
+
+	fmt.Printf("Total write time: %f ms\n", rtotalWriteTime / 1000)
 	rtotalWriteTime = rtotalWriteTime / float64(total)
-	fmt.Printf("Total write time: %f μs/op\n", rtotalWriteTime)
+	fmt.Printf("Each write time: %f μs/op\n", rtotalWriteTime)
 	fmt.Println("Total time: ", time.Since(rstart))
 	rocks.Close()
 
@@ -186,23 +194,29 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 	bstart := time.Now()
 	btotalWriteTime := float64(0)
 	for i := 0; i < dataCnt; i++ {
+		entries := make([]*entry, 0, batchSize)
+		for k := 0; k < batchSize; k ++ {
+			e := new(entry)
+			fillEntryWithIndex(e, valuesz, k)
+			entries = append(entries, e)
+		}
+
+		wstart := time.Now()
 		wb := bdg.NewWriteBatch()
 		//txn := bdg.NewTransaction(true)
 		for j := 0; j < batchSize; j++ {
-			e := new(entry)
-			fillEntryWithIndex(e, valuesz, i)
-			y.Check(wb.Set(e.Key, e.Value))
+			y.Check(wb.Set(entries[j].Key, entries[j].Value))
 			//y.Check(txn.Set(e.Key, e.Value))
 		}
-		wstart := time.Now()
 		y.Check(wb.Flush())
 		//y.Check(txn.Commit())
 		wend := time.Since(wstart)
 		fmt.Printf("badger write %d st data\n", i)
 		btotalWriteTime = btotalWriteTime + float64(wend.Microseconds())
 	}
+	fmt.Printf("Total write time: %f ms\n", btotalWriteTime / 1000)
 	btotalWriteTime = btotalWriteTime / float64(total)
-	fmt.Printf("Total write time: %f μs/op\n", btotalWriteTime)
+	fmt.Printf("Each write time: %f μs/op\n", btotalWriteTime)
 	fmt.Println("Total time: ", time.Since(bstart))
 	bdg.Close()
 

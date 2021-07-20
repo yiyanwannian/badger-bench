@@ -20,11 +20,11 @@ var (
 	// cpuprofile = flag.String("cpuprofile", "", "write cpu profile `file`")
 	// memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 
-	valueSize  = flag.Int("valsz", 0, "Value size in bytes.")
-	start      = flag.Int("start", 1, "data write count range start.")
-	end        = flag.Int("end", 1, "data write count range end.")
-	sp         = flag.Int("skip", 1, "How many million keys grow skip.")
-	bsize      = flag.Int("batchSize", 1, "How many keys each batch write.")
+	valueSize = flag.Int("valsz", 0, "Value size in bytes.")
+	start     = flag.Int("start", 1, "data write count range start.")
+	end       = flag.Int("end", 1, "data write count range end.")
+	sp        = flag.Int("skip", 1, "How many million keys grow skip.")
+	bsize     = flag.Int("batchSize", 1, "How many keys each batch write.")
 )
 
 type entry struct {
@@ -127,9 +127,9 @@ func main() {
 		badgerTimes = append(badgerTimes, bt)
 	}
 
-	for i := dataRangeStart; i <= dataRangeEnd; i++ {
+	for i := 0; i < len(badgerTimes); i++ {
 		fmt.Printf("total: %d, badgerTime: %f μs/op, rocksdbTime: %f μs/op\n",
-			(i+1)*batchSize*skip, badgerTimes[i], rocksdbTimes[i])
+			(i+dataRangeStart)*batchSize*skip, badgerTimes[i], rocksdbTimes[i])
 	}
 }
 
@@ -165,7 +165,7 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 	rstart := time.Now()
 	for i := 1; i <= dataCnt; i++ {
 		entries := make([]*entry, 0, batchSize)
-		for k := 0; k < batchSize; k ++ {
+		for k := 0; k < batchSize; k++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, k)
 			entries = append(entries, e)
@@ -174,7 +174,7 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 		wstart := time.Now()
 		rb := rocks.NewWriteBatch()
 		for j := 0; j < batchSize; j++ {
-			rb.Put(entries[i].Key, entries[j].Value)
+			rb.Put(entries[j].Key, entries[j].Value)
 		}
 
 		y.Check(rocks.WriteBatch(rb))
@@ -184,10 +184,10 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 		rtotalWriteTime = rtotalWriteTime + float64(wend.Microseconds())
 	}
 
-	fmt.Printf("Total write time: %f ms\n", rtotalWriteTime / 1000)
+	fmt.Printf("Total rocksdb write time: %f ms\n", rtotalWriteTime/1000)
 	rtotalWriteTime = rtotalWriteTime / float64(total)
-	fmt.Printf("Each write time: %f μs/op\n", rtotalWriteTime)
-	fmt.Println("Total time: ", time.Since(rstart))
+	fmt.Printf("Each rocksdb write time: %f μs/op\n", rtotalWriteTime)
+	fmt.Println("Total rocksdb time: ", time.Since(rstart))
 	rocks.Close()
 
 	fmt.Println("Badger:")
@@ -195,7 +195,7 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 	btotalWriteTime := float64(0)
 	for i := 0; i < dataCnt; i++ {
 		entries := make([]*entry, 0, batchSize)
-		for k := 0; k < batchSize; k ++ {
+		for k := 0; k < batchSize; k++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, k)
 			entries = append(entries, e)
@@ -214,10 +214,10 @@ func bench_test(dataCnt, valuesz, batchSize int) (rocksdbTime, badgerTime float6
 		fmt.Printf("badger write %d st data\n", i)
 		btotalWriteTime = btotalWriteTime + float64(wend.Microseconds())
 	}
-	fmt.Printf("Total write time: %f ms\n", btotalWriteTime / 1000)
+	fmt.Printf("Total badger write time: %f ms\n", btotalWriteTime/1000)
 	btotalWriteTime = btotalWriteTime / float64(total)
-	fmt.Printf("Each write time: %f μs/op\n", btotalWriteTime)
-	fmt.Println("Total time: ", time.Since(bstart))
+	fmt.Printf("Each badger write time: %f μs/op\n", btotalWriteTime)
+	fmt.Println("Total badger time: ", time.Since(bstart))
 	bdg.Close()
 
 	fmt.Println("\nTotal:", total)

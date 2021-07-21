@@ -188,15 +188,15 @@ func bench_badgerdb_leveldb_test(dataCnt, valuesz, batchSize int) (rocksdbTime, 
 	rtotalWriteTime := float64(0)
 	rstart := time.Now()
 	for i := 1; i <= dataCnt; i++ {
-		wstart1 := time.Now()
+		//wstart1 := time.Now()
 		entries := make([]*entry, 0, batchSize)
 		for k := 0; k < batchSize; k++ {
 			e := new(entry)
 			fillEntryWithIndex(e, valuesz, k)
 			entries = append(entries, e)
 		}
-		wend1 := time.Since(wstart1)
-		fmt.Println(fmt.Sprintf("mock data time: %d ms", wend1 / 1000))
+		//wend1 := time.Since(wstart1)
+		//fmt.Println(fmt.Sprintf("mock data time: %d ms", wend1 / 1000))
 
 		wstart := time.Now()
 		lb := &leveldb.Batch{}
@@ -206,7 +206,7 @@ func bench_badgerdb_leveldb_test(dataCnt, valuesz, batchSize int) (rocksdbTime, 
 
 		y.Check(level.Write(lb, &lvlopt.WriteOptions{Sync: false}))
 		wend := time.Since(wstart)
-		fmt.Println(fmt.Sprintf("write data time: %d ms", wend / 1000))
+		//fmt.Println(fmt.Sprintf("write data time: %d ms", wend / 1000))
 		fmt.Printf("leveldb write %d st data\n", i)
 		rtotalWriteTime = rtotalWriteTime + float64(wend.Microseconds())
 	}
